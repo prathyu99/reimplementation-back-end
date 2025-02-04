@@ -120,6 +120,12 @@ Rails.application.routes.draw do
           delete '/:id', to: 'participants#destroy'
         end
       end
+
+      resources :impersonate do
+        get ':user_name', on: :collection, to: 'impersonate#get_users_list'
+        post '', on: :collection, to: 'impersonate#impersonate'
+      end
+
     end
   end
 end

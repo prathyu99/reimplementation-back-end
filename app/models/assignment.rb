@@ -120,11 +120,11 @@ class Assignment < ApplicationRecord
   def is_calibrated?
     is_calibrated
   end
-  
+
   def pair_programming_enabled?
     enable_pair_programming
   end
-  
+
   def has_badge?
     has_badge
   end

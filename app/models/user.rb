@@ -14,10 +14,10 @@ class User < ApplicationRecord
   belongs_to :parent, class_name: 'User', optional: true
   has_many :users, foreign_key: 'parent_id', dependent: :nullify
   has_many :invitations
-  has_many :assignments
   has_many :teams_users, dependent: :destroy
   has_many :teams, through: :teams_users
   has_many :participants
+  has_many :assignments, through: :participants
 
   scope :students, -> { where role_id: Role::STUDENT }
   scope :tas, -> { where role_id: Role::TEACHING_ASSISTANT }
@@ -87,6 +87,106 @@ class User < ApplicationRecord
     user
   end
 
+  # Fetches available users whose full names match the provided name prefix (case-insensitive).
+  # Returns a limited list of users (up to 10) who have roles similar or subordinate to the current user's role.
+  def get_available_users(name)
+    lesser_roles = role.subordinate_roles_and_self
+    all_users = User.where('full_name LIKE ?', "%#{name}%").limit(20)
+    visible_users = all_users.select { |user| lesser_roles.include? user.role }
+    visible_users[0, 10] # the first 10
+  end
+
+  # Check if the user can impersonate another user
+  def can_impersonate?(user)
+    return true if role.super_administrator?
+    return true if instructor_for?(user)
+    # Skip below check if user's role is "Instructor"
+    return false if instructor?
+    return true if teaching_assistant_for?(user)
+    # Skip recursively_parent_of check if user's role is "Teaching Assistant"
+    return false if teaching_assistant?
+    return true if recursively_parent_of(user.role)
+    false
+  end
+
+  # Check if the current user is an instructor and has any relationship with the given user (student or TA)
+  def instructor_for?(user)
+    return false unless instructor?
+    return true if instructor_for_student?(user)
+    return true if instructor_for_ta?(user)
+  end
+
+  # Helper method to check if there are any courses where a student is enrolled in assignments
+  def courses_where_student_participates(courses, student)
+    courses.any? do |course|
+      course.assignments.any? do |assignment|
+        assignment.participants.map(&:user_id).include?(student.id)
+      end
+    end
+  end
+
+  # Check if the instructor has any relationship with the given student
+  def instructor_for_student?(student)
+    return false unless student.role.name == 'Student'  # Ensure the role is 'Student'
+
+    instructor = Instructor.find(id)
+
+    # Check if the instructor has any courses where the student is enrolled in an assignment
+    return courses_where_student_participates(Instructor.list_all(Course, instructor),student)
+  end
+
+  # Check if the instructor has common courses with the given teaching assistant
+  def instructor_for_ta?(ta)
+    return false unless ta.role.name == 'Teaching Assistant'  # Ensure the role is 'Teaching Assistant'
+
+    instructor = Instructor.find(id)
+
+    # Get all courses taught by the instructor
+    instructor_courses = Instructor.list_all(Course, instructor)
+
+    # Get all courses associated with the TA
+    ta_courses = TaMapping.get_courses(ta)
+
+    # Convert lists to sets for efficient intersection
+    instructor_course_set = instructor_courses.to_set
+    ta_course_set = ta_courses.to_set
+
+    # Check for common courses using set intersection
+    has_common_course = !(instructor_course_set & ta_course_set).empty?
+
+    return has_common_course
+  end
+
+  # Check if the user is a teaching assistant for the student's course
+  def teaching_assistant_for?(student)
+    return false unless teaching_assistant?
+    return false unless student.role.name == 'Student'
+
+    # We have to use the Ta object instead of User object
+    # because single table inheritance is not currently functioning
+    ta = Ta.find(id)
+
+    # Check if the TA has any courses where the student is enrolled in an assignment
+    return courses_where_student_participates(TaMapping.get_courses(ta),student)
+
+    false
+  end
+
+  # Check if the user is a teaching assistant
+  def teaching_assistant?
+    true if role.ta?
+  end
+
+  # Recursively check if parent child relationship exists
+  def recursively_parent_of(user_role)
+    p = user_role.parent
+    return false if p.nil?
+    return true if p == self.role
+    return false if p.super_administrator?
+    recursively_parent_of(p)
+  end
+
+
   # This will override the default as_json method in the ApplicationRecord class and specify
   # that only the id, name, and email attributes should be included when a User object is serialized.
   def as_json(options = {})
@@ -113,5 +213,4 @@ class User < ApplicationRecord
     self.email_on_review_of_review ||= false
     self.etc_icons_on_homepage ||= true
   end
-
 end
